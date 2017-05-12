@@ -1,7 +1,5 @@
 package pers.ys.jms.mq.init;
 
-import java.lang.reflect.Constructor;
-
 import javax.jms.JMSException;
 import javax.jms.Message;
 import javax.jms.MessageListener;
@@ -14,6 +12,7 @@ import javax.jms.Session;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
+import pers.ys.jms.mq.component.GenericProcessor;
 import pers.ys.jms.mq.component.Handler;
 import pers.ys.jms.mq.component.ObjectHandler;
 import pers.ys.jms.mq.component.ProcessResultsCache;
@@ -34,89 +33,72 @@ public class AsyncHander implements HandlerFactory, MessageListener {
 	private static final Log LOGGER = LogFactory.getLog(AsyncHander.class);
 
 	/**
-	 * 消息通道
+	 * 消息处理器
 	 */
-	private final String target;
+	private final Processor processor;
+
+	/**
+	 * ActiveMQ功能切换
+	 */
+	private final String mqSwitch;
 
 	/**
 	 * 处理线程池
 	 */
-	private final ThreadPool pool;
+	private ThreadPool pool;
 
 	/**
-	 * 消息处理类
+	 * 消息通道
 	 */
-	private final Class<Processor> processor;
+	private String target;
 
 	/**
 	 * 处理结果缓存
 	 */
-	private final ProcessResultsCache resultsCache;
+	private ProcessResultsCache resultsCache;
 
 	/**
 	 * JMS连接工厂
 	 */
-	private final MQConnectionFctory connectionFctory;
+	private MQConnectionFctory connectionFctory;
 
-	@SuppressWarnings("unchecked")
-	public AsyncHander(final Config config, ThreadPool pool) throws ClassNotFoundException {
-		this.target = config.get("target");
-		this.pool = pool;
-		// 加载处理类
+	public AsyncHander(ThreadPool pool, Config config) throws ClassNotFoundException {
+		// 加载处理器
 		try {
 			String className = config.get("class");
 			Class<?> clazz = Class.forName(className);
 			if (!Processor.class.isAssignableFrom(clazz))
 				throw new ClassNotFoundException("Class " + className + " not a Processor.");
-			processor = (Class<Processor>) clazz;
+			processor = constructProcessor(clazz);
 		} catch (ClassNotFoundException e) {
 			LOGGER.error(e);
 			throw e;
 		}
-		// 初始化资源
-		resultsCache = new ProcessResultsCache(config);
-		connectionFctory = new ActiveMQConnectionFctory(config);
-		// 配置消息监听器
-		new Thread(new Runnable() {
-
-			@Override
-			public void run() {
-				try {
-					QueueSession session = getSession();
-					Queue queue = session.createQueue(target);
-					QueueReceiver receiver = session.createReceiver(queue);
-					receiver.setMessageListener(AsyncHander.this);
-					LOGGER.info("MessageListener is registered (" + config.get("broker_url") + ":" + config.get("target") + ").");
-				} catch (JMSException e) {
-					LOGGER.error("MessageListener is registered failed (" + config.get("broker_url") + ":" + config.get("target") + ")!", e);
-				}
-			}
-		}).start();
+		mqSwitch = config.get("switch");
+		if (mqSwitch.equals("1")) init(pool, config);// 状态开启则初始化队列资源
 	}
 
 	@Override
 	public Handler getHandler() throws JMSException {
-		return new ObjectHandler(target, getSession(), resultsCache);
+		if (mqSwitch.equals("1")) return new ObjectHandler(mqSwitch, target, resultsCache, getSession(false));
+		return new ObjectHandler(mqSwitch, processor);
 	}
 
 	@Override
 	public void onMessage(Message message) {
-		pool.execute(constructProcessor(message));
+		pool.execute(new GenericProcessor(message, processor, resultsCache));
 	}
 
 	/**
 	 * 构造处理器
 	 * 
-	 * @param message
+	 * @param clazz
 	 * @return
 	 */
-	private Processor constructProcessor(Message message) {
+	private Processor constructProcessor(Class<?> clazz) {
 		Processor processor = null;
 		try {
-			Class<?>[] types = new Class[] { Message.class, ProcessResultsCache.class };
-			Object[] params = new Object[] { message, resultsCache };
-			Constructor<Processor> constructor = this.processor.getConstructor(types);
-			processor = constructor.newInstance(params);
+			processor = (Processor) clazz.newInstance();
 		} catch (Exception e) {
 			LOGGER.error(e);
 		}
@@ -126,12 +108,49 @@ public class AsyncHander implements HandlerFactory, MessageListener {
 	/**
 	 * 获取JMS会话
 	 * 
+	 * @param failover
 	 * @return
 	 * @throws JMSException
 	 */
-	private QueueSession getSession() throws JMSException {
-		QueueConnection connection = (QueueConnection) connectionFctory.getConnection();
-		QueueSession session = connection.createQueueSession(Boolean.FALSE, Session.AUTO_ACKNOWLEDGE);
+	private QueueSession getSession(boolean failover) throws JMSException {
+		QueueConnection connection = null;
+		QueueSession session = null;
+		try {
+			connection = (QueueConnection) connectionFctory.getConnection(failover);
+			session = connection.createQueueSession(Boolean.FALSE, Session.AUTO_ACKNOWLEDGE);
+		} catch (JMSException e) {
+			if (connection != null) ((ActiveMQConnectionFctory) connectionFctory).resetConnection();
+			throw e;
+		}
 		return session;
+	}
+
+	/**
+	 * 初始化资源
+	 * 
+	 * @param pool
+	 * @param config
+	 */
+	private void init(ThreadPool pool, final Config config) {
+		this.pool = pool;
+		target = config.get("target");
+		resultsCache = new ProcessResultsCache(config);
+		connectionFctory = new ActiveMQConnectionFctory(config);
+		// 注册消息监听器
+		new Thread(new Runnable() {
+
+			@Override
+			public void run() {
+				try {
+					QueueSession session = getSession(true);
+					Queue queue = session.createQueue(target);
+					QueueReceiver receiver = session.createReceiver(queue);
+					receiver.setMessageListener(AsyncHander.this);
+					LOGGER.info("MessageListener is registered (" + "failover:" + config.get("broker_url") + ":" + config.get("target") + ").");
+				} catch (JMSException e) {
+					LOGGER.error("MessageListener is registered failed (" + "failover:" + config.get("broker_url") + ":" + config.get("target") + ")!", e);
+				}
+			}
+		}).start();
 	}
 }

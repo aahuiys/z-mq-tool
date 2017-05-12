@@ -135,7 +135,7 @@ public class ProcessResultsCache {
 	 * @return
 	 * @throws InterruptedException
 	 */
-	private Semaphore getSemaphore(Message message) throws InterruptedException {
+	public Semaphore getSemaphore(Message message) throws InterruptedException {
 		return getSemaphore(message.getId());
 	}
 
@@ -146,7 +146,7 @@ public class ProcessResultsCache {
 	 * @return
 	 * @throws InterruptedException
 	 */
-	private Semaphore getSemaphore(String id) throws InterruptedException {
+	public Semaphore getSemaphore(String id) throws InterruptedException {
 		semaphoreLock.lockRead();
 		try {
 			return semaphores.get(id);
@@ -161,7 +161,7 @@ public class ProcessResultsCache {
 	 * @param message
 	 * @throws InterruptedException
 	 */
-	private void removeSemaphore(Message message) throws InterruptedException {
+	public void removeSemaphore(Message message) throws InterruptedException {
 		removeSemaphore(message.getId());
 	}
 
@@ -171,7 +171,7 @@ public class ProcessResultsCache {
 	 * @param id
 	 * @throws InterruptedException
 	 */
-	private void removeSemaphore(String id) throws InterruptedException {
+	public void removeSemaphore(String id) throws InterruptedException {
 		semaphoreLock.lockWrite();
 		try {
 			semaphores.remove(id);

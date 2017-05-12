@@ -1,22 +1,27 @@
 package pers.ys.jms.mq;
 
-import pers.ys.jms.mq.component.ProcessResultsCache;
+import java.util.HashMap;
+
 import pers.ys.jms.mq.component.Processor;
 import pers.ys.jms.mq.message.Message;
 
-//继承Processor类实现不同的处理方法
-public class TestProcessor extends Processor {
-
-	// 调用父类唯一有参构造
-	public TestProcessor(javax.jms.Message message, ProcessResultsCache resultsCache) {
-		super(message, resultsCache);
-	}
+//通过Processor接口实现不同的处理器
+public class TestProcessor implements Processor {
 
 	@Override
-	protected Message process(Message message) {
+	public Message process(Message message) {
 		// 解析message的数据并进行处理
-		String s = message.getMessages()[0] + " World!";
+		// String s = message.getMessages()[0] + " World!";
+		String url = message.getMessages()[0].toString();
+		@SuppressWarnings("unchecked")
+		HashMap<String, String> map = (HashMap<String, String>) message.getMessages()[1];
+		String s = "";
+		try {
+			s = ApacheHTTPSimulate.sendHttp("POST", url, map);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
 		// 处理完毕后创建包含处理结果的新消息并返回
-		return new Message(message.getId(), s);
+		return new Message(message.getId(), s, message.getMessages()[2]);
 	}
 }

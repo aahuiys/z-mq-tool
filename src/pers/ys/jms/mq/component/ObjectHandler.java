@@ -20,43 +20,67 @@ import pers.ys.jms.mq.util.UUIDGenerator;
 public class ObjectHandler implements Handler {
 
 	/**
-	 * 消息通道
+	 * ActiveMQ功能切换
 	 */
-	private final String target;
+	private final String mqSwitch;
 
 	/**
-	 * JMS会话
+	 * 消息处理器
 	 */
-	private final QueueSession session;
+	private Processor processor;
+
+	/**
+	 * 消息通道
+	 */
+	private String target;
 
 	/**
 	 * 处理结果缓存
 	 */
-	private final ProcessResultsCache resultsCache;
+	private ProcessResultsCache resultsCache;
 
-	public ObjectHandler(String target, QueueSession session, ProcessResultsCache resultsCache) {
+	/**
+	 * JMS会话
+	 */
+	private QueueSession session;
+
+	public ObjectHandler(String mqSwitch, Processor processor) {
+		this.mqSwitch = mqSwitch;
+		this.processor = processor;
+	}
+
+	public ObjectHandler(String mqSwitch, String target, ProcessResultsCache resultsCache, QueueSession session) {
+		this.mqSwitch = mqSwitch;
 		this.target = target;
-		this.session = session;
 		this.resultsCache = resultsCache;
+		this.session = session;
 	}
 
 	@Override
 	public Message request(Serializable... object) throws JMSException, InterruptedException {
+		// 生成唯一消息ID
+		String messageId = UUIDGenerator.getUUID();
+		// 创建消息
+		Message message = new Message(messageId, object);
+		if (mqSwitch.equals("1")) return request(message);
+		return processor.process(message);
+	}
+
+	public Message request(Message message) throws JMSException, InterruptedException {
 		QueueSender sender = null;
 		try {
 			Queue queue = session.createQueue(target);
 			sender = session.createSender(queue);
 			sender.setDeliveryMode(DeliveryMode.NON_PERSISTENT);
-			// 生成唯一消息ID
-			String messageId = UUIDGenerator.getUUID();
-			// 创建消息
-			Message msg = new Message(messageId, object);
 			// 设置等待信号
-			resultsCache.setSemaphore(messageId);
+			resultsCache.setSemaphore(message.getId());
 			// 发送消息
-			sender.send(session.createObjectMessage(msg));
+			sender.send(session.createObjectMessage(message));
 			// 从缓存中取回处理结果
-			return resultsCache.getMessage(messageId);
+			return resultsCache.getMessage(message.getId());
+		} catch (JMSException e) {
+			if (resultsCache.getSemaphore(message) != null) resultsCache.removeSemaphore(message);
+			throw e;
 		} finally {
 			try {
 				// 释放资源
